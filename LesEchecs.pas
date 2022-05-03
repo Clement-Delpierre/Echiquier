@@ -10,11 +10,11 @@ uses
 type
 	TCouleurPiece = (blanc, noir);
 
-	// on declare TCase et TPiece directement car ils s'appellent reciproquement
+	// On declare TCase et TPiece directement car ils s'appellent reciproquement
 	TCase = class;
 	TPiece = class;
 
-	// type modelisant une case de l'echiquier
+	// Type modelisant une case de l'echiquier
 	TCase = class(TShape)
 	private
 		Foccupant : TPiece;
@@ -24,7 +24,7 @@ type
 		procedure Colorer(r, g, b: Integer);
 	end;
 
-	// type abstrait modelisant une piece puis types specifiques pour chacune
+	// Type abstrait modelisant une piece puis types specifiques pour chacune
 	TPiece = class(TImage)
 	private
 		Fcouleur : TCouleurPiece;
