@@ -1,10 +1,10 @@
-unit LesEchecs;
+﻿unit LesEchecs;
 
 interface
 
 uses
-	Winapi.Windows, Winapi.Messages, System.SysUtils, System.Variants, System.Classes, Vcl.Graphics, System.Generics.Collections,
-	Vcl.Controls, Vcl.Forms, Vcl.Dialogs, Vcl.ExtCtrls, Vcl.Imaging.pngimage;
+	Winapi.Windows, Winapi.Messages, System.SysUtils, System.UITypes, System.Variants, System.Classes, Vcl.Graphics, System.Generics.Collections,
+	Vcl.Controls, Vcl.Forms, Vcl.Dialogs, Vcl.ExtCtrls, Vcl.Imaging.pngimage, Vcl.StdCtrls, System.Math;
 
 {$REGION 'Types'}
 type
@@ -22,6 +22,7 @@ type
 		FpositionY : Integer;
 	public
 		procedure Colorer(r, g, b: Integer);
+		procedure ChangerEtat(etat : string);
 	end;
 
 	// Type abstrait modelisant une piece puis types specifiques pour chacune
@@ -32,46 +33,51 @@ type
 	public
 		constructor Create(case_ : TCase; couleur : TCouleurPiece); reintroduce; virtual;
 
-		procedure TuerPiece(piece : TPiece);
-		procedure Deplacer; virtual; abstract;
+		procedure Deplacer(case_ : TCase);
+		procedure CanMove; virtual; abstract;
+		procedure PieceMourir;
+		procedure DeplacementEnLigne;
+		procedure DeplacementDiagonal;
 
-		procedure PieceClick(sender: TObject);
+
+		procedure PieceClick(Sender: TObject);
 	end;
 	
 	TPiecePion = class(TPiece)
 	public
 		constructor Create(case_ : TCase; couleur : TCouleurPiece); override;
-		procedure Deplacer; override;
+		procedure CanMove; override;
+		procedure PromotionPion(couleur : TCouleurPiece);
 	end;
 
 	TPieceTour = class(TPiece)
 	public
 		constructor Create(case_ : TCase; couleur : TCouleurPiece); override;
-		procedure Deplacer; override;
+		procedure CanMove; override;
 	end;
 
 	TPieceCavalier = class(TPiece)
 	public
 		constructor Create(case_ : TCase; couleur : TCouleurPiece); override;
-		procedure Deplacer; override;
+		procedure CanMove; override;
 	end;
 
 	TPieceFou = class(TPiece)
 	public
 		constructor Create(case_ : TCase; couleur : TCouleurPiece); override;
-		procedure Deplacer; override;
+		procedure CanMove; override;
 	end;
 
 	TPieceDame = class(TPiece)
 	public
 		constructor Create(case_ : TCase; couleur : TCouleurPiece); override;
-		procedure Deplacer; override;
+		procedure CanMove; override;
 	end;
 
 	TPieceRoi = class(TPiece)
 	public
 		constructor Create(case_ : TCase; couleur : TCouleurPiece); override;
-		procedure Deplacer; override;
+		procedure CanMove; override;
 	end;
 
 	TFenetre = class(TForm)
@@ -79,7 +85,9 @@ type
 		echiquier: array[0..7, 0..7] of TCase;
 		piecesBlanches: TObjectList<TPiece>;
 		piecesNoires: TObjectList<TPiece>;
+		pieceSelection: TPiece;
 		procedure InitialiserPartie;
+		procedure ResetSelection;
 	published
 		procedure Initialisation(Sender: TObject);
 		procedure CaseClick(Sender : TObject);
@@ -111,36 +119,7 @@ begin
 	self.OnDblClick := clickEvent;
 end;
 
-procedure TFenetre.CaseClick (Sender : TObject);
-var
-	case_: TCase;
-begin
-	case_ := Sender as TCase;
-
-	ShowMessage('Vous avez click sur la case : ' + IntToStr(case_.FpositionX) + IntToStr(case_.FpositionY) 
-  		+ '.');
-end;
-
-procedure TPiece.PieceClick(Sender: TObject);
-var
-	piece: TPiece;
-begin
-	piece := Sender as TPiece;
-
-	if Sender.ClassNameIs('TPiecePion') and (piece.Fcouleur = TCouleurPiece.blanc) then
-		self.Deplacer;
-end;
-
 {$ENDREGION}
-
-procedure TCase.Colorer(r, g, b: Integer);
-var
-	couleur: TColor;
-begin
-	couleur := RGB(r, g, b);
-	self.Pen.Color := couleur;
-	self.Brush.Color := couleur;
-end;
 
 procedure TFenetre.Initialisation(Sender: TObject);
 var
@@ -148,6 +127,7 @@ var
 	tmp : TCase;
 begin
 	self.Color := RGB(22, 21, 19);
+	self.pieceSelection := Nil;
 
 	for colonne := 0 to 7 do
 	for ligne := 0 to 7 do
@@ -163,7 +143,6 @@ begin
 
 		tmp.SetOnClick(CaseClick);
 
-		tmp.Pen.Width := 32;
 		if (colonne + ligne) mod 2 = 0 then
 			tmp.Colorer(181, 136, 99)
 		else
@@ -171,6 +150,7 @@ begin
 
 		tmp.FpositionX := colonne;
 		tmp.FpositionY := ligne;
+		tmp.Foccupant := nil;
 		self.echiquier[colonne, ligne] := tmp;
 	end;
 
@@ -206,6 +186,43 @@ begin
 	TPieceTour.Create(self.echiquier[7,7], TCouleurPiece.noir);
 end;
 
+// Colore la case en entier de la meme couleur : son coeur et sa bordure
+procedure TCase.Colorer(r, g, b: Integer);
+var
+	couleur: TColor;
+begin
+	couleur := RGB(r, g, b);
+	self.Pen.Color := couleur;
+	self.Brush.Color := couleur;
+end;
+
+// Colore les cases selon leur état
+procedure TCase.ChangerEtat(etat : string);
+begin
+	if etat = 'deplacement' then
+		self.Colorer(176,242,182)
+	else if etat = 'attaque' then
+		self.Colorer(187,11,11)
+	else
+end;
+
+{ Après un coup joué ou à l'annulation de la sélection d'une pièce (clic sur une case ni rogue ni vert),
+reset la couleur des cases et place PieceSelection sur false }
+procedure TFenetre.ResetSelection;
+var
+	i, j : integer;
+begin
+	for i := 0 to 7 do
+	for j := 0 to 7 do
+	begin
+		if (i + j) mod 2 = 0 then
+			self.echiquier[i,j].Colorer(181, 136, 99)
+		else
+			self.echiquier[i,j].Colorer(240, 217, 181);
+	end;		
+	self.pieceSelection := Nil;
+end;
+
 {$REGION 'Constructeurs de pieces'}
 
 constructor TPiece.Create(case_ : TCase; couleur : TCouleurPiece);
@@ -220,7 +237,6 @@ begin
 	self.Stretch := true;
 	self.Parent := case_.Parent;
 
-	// self.OnDblClick := ImageDblClick;
 	self.OnClick := PieceClick;
 
 	case_.Foccupant := self;
@@ -293,53 +309,359 @@ end;
 
 {$ENDREGION}
 
-procedure TPiece.TuerPiece(piece: TPiece);
-var
-	tmp : TCase;
-begin
-	tmp := self.Fposition;
-	self.Destroy;
-	tmp.Foccupant := nil;	
-end;
-
 {$REGION 'Deplacement de pieces'}
 
-procedure TPiecePion.Deplacer;
+procedure TPiecePion.CanMove;
+var
+	x,y : integer;
 begin
-	if Fenetre.echiquier[Self.FPosition.FpositionX, Self.FPosition.FpositionY + 1].Foccupant <> nil then
-		ShowMessage('occupay!')
-	else
-	begin
-		ShowMessage('DISPO');
-		// TODO: self.Fposition.FpositionY :=
+	x := Self.FPosition.FpositionX;
+	y := Self.FPosition.FpositionY;
+
+	// possibilités de déplacement et de prise du pion blanc
+	if self.Fcouleur = TCouleurPiece.blanc then
+	begin	
+		if (y < 7) then
+			if (Fenetre.echiquier[x, y + 1].Foccupant = Nil) then
+				begin
+					Fenetre.echiquier[x, y + 1].Brush.Color := clGreen;
+					if (Fenetre.echiquier[x, y + 2].Foccupant = Nil) and (y = 1) then
+						Fenetre.echiquier[x, y + 2].Brush.Color := clGreen;
+				end;
+		if (x > 0) and (y < 7) then
+			if (Fenetre.echiquier[x - 1, y + 1].Foccupant <> Nil)
+				and (Fenetre.echiquier[x - 1, y + 1].Foccupant.Fcouleur = TCouleurPiece.noir) then
+				Fenetre.echiquier[x - 1, y + 1].Brush.Color := clRed;
+		if (x < 7) and (y < 7) then
+			if (Fenetre.echiquier[x + 1, y + 1].Foccupant <> Nil)
+				and (Fenetre.echiquier[x + 1, y + 1].Foccupant.Fcouleur = TCouleurPiece.noir) then
+				Fenetre.echiquier[x + 1, y + 1].Brush.Color := clRed;
+	end;
+	// possibilités de déplacement et de prise du pion noir
+	if self.Fcouleur = TCouleurPiece.noir then
+	begin	
+		if (y > 0) then
+			if (Fenetre.echiquier[x, y - 1].Foccupant = Nil) then
+			begin
+				Fenetre.echiquier[x, y - 1].Brush.Color := clGreen;
+				if (Fenetre.echiquier[x, y - 2].Foccupant = Nil) and (y = 6) then
+					Fenetre.echiquier[x, y - 2].Brush.Color := clGreen
+			end;
+		if (x > 0) and (y > 0) then
+			if (Fenetre.echiquier[x - 1, y - 1].Foccupant <> Nil)
+				and (Fenetre.echiquier[x - 1, y - 1].Foccupant.Fcouleur = TCouleurPiece.blanc) then
+				Fenetre.echiquier[x - 1, y - 1].Brush.Color := clRed;
+		if (x < 7) and (y > 0) then
+			if (Fenetre.echiquier[x + 1, y - 1].Foccupant <> Nil)
+				and (Fenetre.echiquier[x + 1, y - 1].Foccupant.Fcouleur = TCouleurPiece.blanc) then
+				Fenetre.echiquier[x + 1, y - 1].Brush.Color := clRed;
 	end;
 end;
 
-procedure TPieceTour.Deplacer;
+procedure TPiecePion.PromotionPion(couleur : TCouleurPiece);
+var
+	tmp : TCase;
 begin
-
+	tmp := Fenetre.pieceSelection.Fposition;
+	Fenetre.pieceSelection.Destroy; // destruction du pion
+	if couleur = TCouleurPiece.blanc then
+		TPieceDame.Create(tmp, TCouleurPiece.blanc) // création de la dame si blanc
+	else
+		TPieceDame.Create(tmp, TCouleurPiece.noir); // création de la dame blanche // bon appétit !
 end;
 
-procedure TPieceCavalier.Deplacer;
+procedure TPieceTour.CanMove;
 begin
-
+	self.DeplacementEnLigne;
 end;
 
-procedure TPieceFou.Deplacer;
+procedure TPieceCavalier.CanMove;
+var
+	x, y : integer;
 begin
+	x := self.Fposition.FpositionX;
+	y := self.Fposition.FpositionY;
 
+	if (x + 2 <= 7) and (y + 1 <= 7) then
+		if Fenetre.echiquier[x + 2, y + 1].Foccupant = Nil then
+			Fenetre.echiquier[x + 2, y + 1].Brush.Color := clGreen
+		else if Fenetre.echiquier[x + 2, y + 1].Foccupant.Fcouleur <> self.Fcouleur then
+			Fenetre.echiquier[x + 2, y + 1].Brush.Color := clRed;
+
+	if (x + 2 <= 7) and (y - 1 >= 0) then
+		if Fenetre.echiquier[x + 2, y - 1].Foccupant = Nil then
+			Fenetre.echiquier[x + 2, y - 1].Brush.Color := clGreen
+		else if Fenetre.echiquier[x + 2, y - 1].Foccupant.Fcouleur <> self.Fcouleur then
+			Fenetre.echiquier[x + 2, y - 1].Brush.Color := clRed;
+
+	if (x + 1 <= 7) and (y + 2 <= 7) then
+		if Fenetre.echiquier[x + 1, y + 2].Foccupant = Nil then
+			Fenetre.echiquier[x + 1, y + 2].Brush.Color := clGreen
+		else if Fenetre.echiquier[x + 1, y + 2].Foccupant.Fcouleur <> self.Fcouleur then
+			Fenetre.echiquier[x + 1, y + 2].Brush.Color := clRed;
+
+	if (x - 1 >= 0) and (y + 2 <= 7) then
+		if Fenetre.echiquier[x - 1, y + 2].Foccupant = Nil then
+			Fenetre.echiquier[x - 1, y + 2].Brush.Color := clGreen
+		else if Fenetre.echiquier[x - 1, y + 2].Foccupant.Fcouleur <> self.Fcouleur then
+			Fenetre.echiquier[x - 1, y + 2].Brush.Color := clRed;
+
+	if (x + 1 <= 7) and (y - 2 >= 0) then
+		if Fenetre.echiquier[x + 1, y - 2].Foccupant = Nil then
+			Fenetre.echiquier[x + 1, y - 2].Brush.Color := clGreen
+		else if Fenetre.echiquier[x + 1, y - 2].Foccupant.Fcouleur <> self.Fcouleur then
+			Fenetre.echiquier[x + 1, y - 2].Brush.Color := clRed;
+	
+	if (x - 2 >= 0) and (y - 1 >= 0) then
+		if Fenetre.echiquier[x - 2, y - 1].Foccupant = Nil then
+			Fenetre.echiquier[x - 2, y - 1].Brush.Color := clGreen
+		else if Fenetre.echiquier[x - 2, y - 1].Foccupant.Fcouleur <> self.Fcouleur then
+			Fenetre.echiquier[x - 2, y - 1].Brush.Color := clRed;
+	
+	if (x - 1 >= 0) and (y - 2 >= 0) then
+		if Fenetre.echiquier[x - 1, y - 2].Foccupant= Nil then
+			Fenetre.echiquier[x - 1, y - 2].Brush.Color := clGreen
+		else if Fenetre.echiquier[x - 1, y - 2].Foccupant.Fcouleur <> self.Fcouleur then
+			Fenetre.echiquier[x - 1, y - 2].Brush.Color := clRed;
+	
+	if (x - 2 >= 0) and (y + 1 <= 7) then
+		if Fenetre.echiquier[x - 2, y + 1].Foccupant = Nil then
+			Fenetre.echiquier[x - 2, y + 1].Brush.Color := clGreen
+		else if Fenetre.echiquier[x - 2, y + 1].Foccupant.Fcouleur <> self.Fcouleur then
+			Fenetre.echiquier[x - 2, y + 1].Brush.Color := clRed;
 end;
 
-procedure TPieceDame.Deplacer;
+procedure TPieceFou.CanMove;
 begin
-
+	self.DeplacementDiagonal;
 end;
 
-procedure TPieceRoi.Deplacer;
+procedure TPieceDame.CanMove;
 begin
+	self.DeplacementEnLigne;
+	self.DeplacementDiagonal;
+end;
 
+procedure TPieceRoi.CanMove;
+var
+	i, j, x, y : integer;
+begin
+	x := self.Fposition.FpositionX;
+	y := self.Fposition.FpositionY;
+
+	for i := 0 to 1 do
+		for j := 0 to 1 do
+			if (0 <= (x + i)) and ((x + i) <= 7) and (0 <= (y + j)) and ((y + j) <= 7) then
+			begin
+				if Fenetre.echiquier[x + i, y + j] = Nil then
+					Fenetre.echiquier[x + i, y + j].Brush.Color := clGreen
+				else if Fenetre.echiquier[x + i, y + j].Foccupant.Fcouleur <> self.Fcouleur then
+					Fenetre.echiquier[x + i, y + j].Brush.Color := clRed
+			end;
+end;
+
+procedure TPiece.DeplacementEnLigne;
+var
+	i, x, y : integer;
+	testSortie : Boolean;
+begin
+	x := self.Fposition.FpositionX;
+	y := self.Fposition.FpositionY;
+
+	// mouvements possibles vers le haut
+	i := y;
+	testSortie := true;
+	while (i < 7) and testSortie do
+	begin
+		i := i + 1;
+		if (Fenetre.echiquier[x, i].Foccupant) = nil then
+			Fenetre.echiquier[x, i].Brush.Color := clGreen
+		else
+		begin
+			if (Fenetre.echiquier[x, i].Foccupant.Fcouleur) <> (self.Fcouleur) then
+				Fenetre.echiquier[x, i].Brush.Color := clRed;
+			testSortie := false;
+		end;
+	end;
+	// mouvements possibles vers le bas
+	i := y;
+	testSortie := true;
+	while (i > 0) and testSortie do
+	begin
+		i := i - 1;
+		if Fenetre.echiquier[x, i].Foccupant = Nil then
+			Fenetre.echiquier[x, i].Brush.Color := clGreen
+		else
+		begin
+			if (Fenetre.echiquier[x, i].Foccupant.Fcouleur) <> (self.Fcouleur) then
+				Fenetre.echiquier[x, i].Brush.Color := clRed;
+			testSortie := false;
+		end;
+	end;
+	// mouvements possibles vers la droite
+	i := x;
+	testSortie := true;
+	while (i < 7) and testSortie do
+	begin
+		i := i + 1;
+		if Fenetre.echiquier[i, y].Foccupant = Nil then
+			Fenetre.echiquier[i, y].Brush.Color := clGreen
+		else
+		begin
+			if (Fenetre.echiquier[i, y].Foccupant.Fcouleur) <> (self.Fcouleur) then
+				Fenetre.echiquier[i, y].Brush.Color := clRed;
+			testSortie := false;
+		end;
+	end;
+	// mouvements possibles vers la gauche
+	i := x;
+	testSortie := true;
+	while (i > 0) and (testSortie = True) do
+	begin
+		i := i - 1;
+		if (Fenetre.echiquier[i, y].Foccupant = Nil) then
+			Fenetre.echiquier[i, y].Brush.Color := clGreen
+		else
+		begin
+			if (Fenetre.echiquier[i, y].Foccupant.Fcouleur) <> (self.Fcouleur) then
+				Fenetre.echiquier[i, y].Brush.Color := clRed;
+			testSortie := false;
+		end;
+	end;
+end;
+
+procedure TPiece.DeplacementDiagonal;
+var
+	i, x, y : integer;
+	testSortie : Boolean;
+begin
+	x := self.Fposition.FpositionX;
+	y := self.Fposition.FpositionY;
+
+	// mouvements possibles en diagonal direction haut-droit
+	i := 1;
+	testSortie := true;
+	while (x + i <= 7) and (y + i <= 7) and testSortie do
+	begin
+		if (Fenetre.echiquier[x + i, y + i].Foccupant) = nil then
+			Fenetre.echiquier[x + i, y + i].Brush.Color := clGreen
+		else
+		begin
+			if (Fenetre.echiquier[x + i, y + i].Foccupant.Fcouleur) <> (self.Fcouleur) then
+				Fenetre.echiquier[x + i, y + i].Brush.Color := clRed;
+			testSortie := false;
+		end;
+		i := i + 1;
+	end;
+	// mouvements possibles en diagonal direction haut-gauche
+	i := 1;
+	testSortie := true;
+	while (x - i >= 0) and (y + i <= 7) and testSortie do
+	begin
+		if (Fenetre.echiquier[x - i, y + i].Foccupant) = nil then
+			Fenetre.echiquier[x - i, y + i].Brush.Color := clGreen
+		else
+		begin
+			if (Fenetre.echiquier[x - i, y + i].Foccupant.Fcouleur) <> (self.Fcouleur) then
+				Fenetre.echiquier[x - i, y + i].Brush.Color := clRed;
+			testSortie := false;
+		end;
+		i := i + 1;
+	end;
+	// mouvements possibles en diagonale direction bas-droite
+	i := 1;
+	testSortie := true;
+	while (x + i <= 7) and (y - i >= 0) and testSortie do
+	begin
+		if (Fenetre.echiquier[x + i, y - i].Foccupant) = nil then
+			Fenetre.echiquier[x + i, y - i].Brush.Color := clGreen
+		else
+		begin
+			if (Fenetre.echiquier[x + i, y - i].Foccupant.Fcouleur) <> (self.Fcouleur) then
+				Fenetre.echiquier[x + i, y - i].Brush.Color := clRed;
+			testSortie := false;
+		end;
+		i := i + 1;
+	end;
+	// mouvements possibles en diagonale direction bas-gauche
+	i := 1;
+	testSortie := true;
+	while (x - i >= 0) and (y - i >= 0) and testSortie do
+	begin
+		if (Fenetre.echiquier[x - i, y - i].Foccupant) = nil then
+			Fenetre.echiquier[x - i, y - i].Brush.Color := clGreen
+		else
+		begin
+			if (Fenetre.echiquier[x - i, y - i].Foccupant.Fcouleur) <> (self.Fcouleur) then
+				Fenetre.echiquier[x - i, y - i].Brush.Color := clRed;
+			testSortie := false;
+		end;
+		i := i + 1;
+	end;
+end;
+
+procedure TPiece.Deplacer(case_ : TCase);
+begin
+	// 1) changer le FOccupant du TCase sur Nil
+	Fenetre.pieceSelection.Fposition.Foccupant := Nil;
+	// 2) mettre le FOccupant de la nouvelle TCase avec la nouvelle piece
+	case_.Foccupant := Fenetre.pieceSelection;
+	// 3) modifier le Fposition du TPiece avec la nouvelle case
+	Fenetre.pieceSelection.Fposition := Fenetre.echiquier[case_.FpositionX, case_.FpositionY];
+	// 4) déplacer l'image, effectue la promotion du pion si nécessaire (plus besoin de l'ancienne image)
+	if (Fenetre.pieceSelection.Fposition.FpositionY = 7) and (Fenetre.pieceSelection.ClassType = TPiecePion)
+		and (Fenetre.pieceSelection.Fcouleur = TCouleurPiece.blanc) then
+		(self as TPiecePion).PromotionPion(blanc)
+	else if (Fenetre.pieceSelection.Fposition.FpositionY = 0) and (Fenetre.pieceSelection.ClassType = TPiecePion)
+		and (Fenetre.pieceSelection.Fcouleur = TCouleurPiece.noir) then
+		(self as TPiecePion).PromotionPion(noir)
+	else
+	begin
+		Fenetre.pieceSelection.Top := case_.Top;
+		Fenetre.pieceSelection.Left := case_.Left;
+	end;
+	// 5) reset les couleurs de plateau et la selection de la piece
+	Fenetre.ResetSelection;
 end;
 
 {$ENDREGION}
+
+procedure TPiece.PieceMourir;
+var
+	tmp : TCase;
+begin
+	tmp := Self.Fposition;
+	Self.Destroy;
+	Fenetre.pieceSelection.Deplacer(tmp);
+end;
+
+procedure TFenetre.CaseClick (Sender : TObject);
+var
+	case_: TCase;
+begin
+	case_ := Sender as TCase;
+
+	if case_.Brush.Color = clGreen then
+		self.PieceSelection.Deplacer(case_)
+	else
+		self.ResetSelection;
+end;
+
+procedure TPiece.PieceClick(Sender: TObject);
+var
+	piece: TPiece;
+begin
+	piece := Sender as TPiece;
+
+	if Fenetre.PieceSelection = Nil then
+	begin
+		Fenetre.pieceSelection := piece; // enregistre la piece selectionnee
+		piece.CanMove
+	end
+	else if piece.Fposition.Brush.Color = clRed then
+		piece.PieceMourir
+	else
+		Fenetre.ResetSelection;
+end;	
 
 end.
